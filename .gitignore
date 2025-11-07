@@ -16,3 +16,6 @@ back/.gradle/
 # Frontend 의존성 폴더
 front/node_modules/
 front/build/
+
+# Backend QueryDSL 생성 폴더
+back/src/main/generated/
