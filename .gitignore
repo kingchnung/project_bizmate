@@ -1,1 +1,18 @@
+# .gitignore 파일 내용
+
+# Backend 민감한 설정 파일
 back/src/main/resources/application.properties
+
+# Backend 업로드 폴더
+back/uploads/
+
+# Backend Reject 파일
+back/*.rej
+
+# Backend 빌드/캐시 폴더
+back/build/
+back/.gradle/
+
+# Frontend 의존성 폴더
+front/node_modules/
+front/build/
