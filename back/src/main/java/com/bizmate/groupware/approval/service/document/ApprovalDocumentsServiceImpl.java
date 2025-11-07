@@ -157,23 +157,16 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
     }
 
 
-    /* -------------------------------------------------------------
-       ② 상신 (SUBMIT)
-       ------------------------------------------------------------- */
     @Override
     @Transactional
     public ApprovalDocumentsDto submit(ApprovalDocumentsDto dto, UserDTO loginUser) throws JsonProcessingException {
-        log.info("🚀 [상신 서비스 호출] 작성자={}, DTO={}", loginUser.getEmpName(), dto);
-        log.info("🔑 submit() loginUser.username={}, userId={}", loginUser.getUsername(), loginUser.getUserId());
 
-        // ✅ 작성자 정보 세팅
         dto.setUserId(loginUser.getUserId());
         dto.setAuthorName(loginUser.getEmpName());
         dto.setUsername(loginUser.getUsername());
 
         validateDraft(dto);
 
-        // ✅ 부서 정보 확인
         Long departmentId = dto.getDepartmentId();
         String departmentCode = dto.getDepartmentCode();
 
@@ -192,15 +185,10 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
             dto.setDepartmentCode(departmentCode);
         }
 
-
-
-        // ✅ 3. 신규 vs 임시저장 구분
         boolean isDraft = "DRAFT".equalsIgnoreCase(dto.getStatus());
         ApprovalDocuments entity;
 
         if (isDraft && dto.getId() != null) {
-            // ① 임시저장(DRAFT) → 상신(IN_PROGRESS)
-            log.info("✏️ 임시저장 문서 상신 전환: {}", dto.getId());
 
             entity = approvalDocumentsRepository.findById(dto.getId())
                     .orElseThrow(() -> new VerificationFailedException("임시저장 문서를 찾을 수 없습니다."));
@@ -208,7 +196,6 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
             entity.setStatus(DocumentStatus.IN_PROGRESS);
             entity.markUpdated(loginUser);
         } else {
-            // ② 신규 상신
             String docNumber = approvalIdGenerator.generateNewId(departmentId, departmentCode);
             dto.setId(docNumber);
             dto.setFinalDocNumber(docNumber);
@@ -218,51 +205,42 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
 
             if (policyOpt.isPresent()) {
                 ApprovalPolicy policy = policyOpt.get();
-                log.info("📋 [{}] 문서유형에 정책 존재 → 자동 결재선 세팅", dto.getDocType());
 
                 List<ApproverStep> autoSteps = policy.getSteps().stream()
                         .sorted(Comparator.comparingInt(ApprovalPolicyStep::getStepOrder))
                         .map(s -> new ApproverStep(
                                 s.getStepOrder(),
-                                s.getApprover() != null ? s.getApprover().getEmpNo() : null,   // approverId
+                                s.getApprover() != null ? s.getApprover().getEmpNo() : null,
                                 s.getApproverName() != null
                                         ? s.getApproverName()
-                                        : (s.getApprover() != null ? s.getApprover().getEmpName() : "-"), // approverName
-                                Decision.PENDING,   // 결재 상태
-                                "",                 // comment
-                                null,               // decidedAt
-                                null                // signImagePath
+                                        : (s.getApprover() != null ? s.getApprover().getEmpName() : "-"),
+                                Decision.PENDING,
+                                "",
+                                null,
+                                null
                         ))
-                        .collect(Collectors.toList());   // ✅ 여기 반드시 추가!
+                        .collect(Collectors.toList());
 
                 dto.setApprovalLine(autoSteps);
-                log.info("✅ 정책 기반 결재선 자동 생성 완료 (총 {}단계)", autoSteps.size());
             } else {
-                log.info("⚙️ [{}] 정책 없음 → 프론트에서 전달된 결재선 수동 적용", dto.getDocType());
                 if (dto.getApprovalLine() == null || dto.getApprovalLine().isEmpty())
                     throw new VerificationFailedException("결재선이 존재하지 않습니다. 수동으로 지정해주세요.");
             }
 
-            log.info("🆕 신규 상신 생성: {}", docNumber);
             entity = mapDtoToEntity(dto, DocumentStatus.IN_PROGRESS);
             entity.markCreated(loginUser);
             entity.setCurrentApproverIndex(0);
         }
 
-        // ✅ 열람자 정보 반영
         if (dto.getViewerIds() != null && !dto.getViewerIds().isEmpty()) {
             entity.setViewerIds(new ArrayList<>(dto.getViewerIds()));
         }
 
         ApprovalDocuments saved = approvalDocumentsRepository.saveAndFlush(entity);
-        log.info("📄 [검증] 문서 저장 완료 - docId={}, title={}, status={}",
-                saved.getDocId(), saved.getTitle(), saved.getStatus());
         approvalDocumentsRepository.flush();
-        log.info("📎 handleFileAttachments() 진입 전 - docId={}", saved.getDocId());
-        // ✅ 첨부파일 처리
+
         handleFileAttachments(dto, saved, loginUser);
 
-        // ✅ 다음 결재자 이메일 알림
         if (saved.getApprovalLine() != null && !saved.getApprovalLine().isEmpty()) {
             ApproverStep next = saved.getApprovalLine().get(0); // 첫 번째 결재자
             userRepository.findByUsername(next.approverId()).ifPresent(nextUser -> {
@@ -277,8 +255,6 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
                 }
             });
         }
-
-        log.info("✅ 상신 완료 및 메일 발송: 문서ID={}", saved.getDocId());
         return mapEntityToDto(saved);
     }
 
@@ -422,9 +398,6 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
     }
 
 
-    /* -------------------------------------------------------------
-   ✅ ③ 승인 (APPROVE) - 결재선 순서 기반 다단계 승인
-   ------------------------------------------------------------- */
     @Override
     @Transactional
     public ApprovalDocumentsDto approve(String docId, UserDTO loginUser) {
@@ -434,7 +407,6 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
         if (document.getStatus() != DocumentStatus.IN_PROGRESS)
             throw new VerificationFailedException("진행 중 상태의 문서만 승인할 수 있습니다.");
 
-        // ② 결재선 불러오기
         List<ApproverStep> line = document.getApprovalLine();
         if (line == null || line.isEmpty())
             throw new VerificationFailedException("결재선 정보가 존재하지 않습니다.");
@@ -442,20 +414,17 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
         int idx = document.getCurrentApproverIndex();
         ApproverStep current = line.get(idx);
 
-        // ③ 현재 결재자 검증
         if (!Objects.equals(current.approverId(), loginUser.getUsername())
                 && !Objects.equals(current.approverName(), loginUser.getEmpName())) {
             throw new VerificationFailedException("현재 결재 차례가 아닙니다.");
         }
 
-        // ④ 사인 이미지 불러오기
         Employee employee = employeeRepository.findByEmpId(loginUser.getEmpId())
                 .orElseThrow(() -> new VerificationFailedException("결재자(Employee)를 찾을 수 없습니다."));
         String signImagePath = employeeSignatureRepository.findByEmployee(employee)
                 .map(EmployeeSignature::getSignImagePath)
                 .orElse(null);
 
-        // ⑤ 승인 처리
         ApproverStep approvedStep = new ApproverStep(
                 current.order(),
                 current.approverId(),
@@ -471,7 +440,6 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
         updatedLine.set(idx, approvedStep);
         document.setApprovalLine(updatedLine);
 
-        // ⑦ 다음 결재자 or 최종 승인 처리
         if (idx + 1 < updatedLine.size()) {
             document.moveToNextApprover();
             ApproverStep next = line.get(document.getCurrentApproverIndex());
@@ -489,20 +457,16 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
                 }
             });
         } else {
-            // 최종 승인
             document.setStatus(DocumentStatus.APPROVED);
             document.setApprovedBy(loginUser.getEmpName());
             document.setApprovedDate(LocalDateTime.now());
             document.setApprovedEmpId(loginUser.getEmpId());
 
-            // 프로젝트 자동 생성 (문서유형이 프로젝트 기획서인 경우)
             if (document.getDocType() == DocumentType.PROJECT_PLAN) {
                 ProjectRequestDTO projectDto = objectMapper.convertValue(document.getDocContent(), ProjectRequestDTO.class);
                 projectService.createProjectByApproval(projectDto, document);
-                log.info("🏗️ 프로젝트 자동 생성 완료 (문서ID={})", document.getDocId());
             }
 
-            // 작성자에게 알림
             if (document.getAuthorUser() != null && document.getAuthorUser().getEmail() != null) {
                 notificationService.sendApprovalCompleteMail(
                         document.getAuthorUser().getEmail(),
@@ -513,10 +477,8 @@ public class ApprovalDocumentsServiceImpl implements ApprovalDocumentsService {
             }
         }
 
-        // ⑧ 업데이트 및 저장
         document.markUpdated(loginUser);
         approvalDocumentsRepository.saveAndFlush(document);
-        log.info("✅ 승인 완료: 문서ID={}, 현재 단계={}/{}", docId, idx + 1, line.size());
 
         return mapEntityToDto(document);
     }

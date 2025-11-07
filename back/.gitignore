@@ -39,8 +39,8 @@ build/
 
 # ## Sensitive Information ##
 # Spring Boot secrets
-application-*.yml
-application-*.properties
+
+application.properties
 
 # Environment variables
 .env

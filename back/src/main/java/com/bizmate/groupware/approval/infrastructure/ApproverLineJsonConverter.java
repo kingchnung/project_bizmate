@@ -13,12 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/**
- * ✅ ApproverLineJsonConverter
- * - List<ApproverStep> ↔ JSON 문자열 변환
- * - null, 빈 JSON([]) 대응
- */
-@Slf4j
+
 @Converter
 public class ApproverLineJsonConverter implements AttributeConverter<List<ApproverStep>, String> {
 
@@ -32,7 +27,6 @@ public class ApproverLineJsonConverter implements AttributeConverter<List<Approv
             if (attribute == null) return "[]";
             return objectMapper.writeValueAsString(attribute);
         } catch (Exception e) {
-            log.error("❌ ApproverLine 직렬화 실패: {}", e.getMessage(), e);
             return "[]";
         }
     }
@@ -45,7 +39,6 @@ public class ApproverLineJsonConverter implements AttributeConverter<List<Approv
             }
             return objectMapper.readValue(dbData, new TypeReference<List<ApproverStep>>() {});
         } catch (Exception e) {
-            log.error("❌ ApproverLine 역직렬화 실패: {}", e.getMessage(), e);
             return new ArrayList<>();
         }
     }
